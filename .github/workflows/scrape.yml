@@ -3,7 +3,7 @@ name: FDA Scraper (scheduled)
 on:
   schedule:
     # รันทุกวัน 05:00 น. เวลาไทย (ICT = UTC+7) -> UTC คือ 22:00 ของวันก่อน
-    - cron: "0 19 * * *"
+    - cron: "0 19 * * 1-5"
   workflow_dispatch: {}
 
 jobs:
