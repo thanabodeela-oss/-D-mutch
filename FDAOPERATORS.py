@@ -30,7 +30,9 @@ OPERATORS = [
     "บริษัท ไมลอทท์ แลบบอราทอรีส์ จำกัด",
     "บริษัท อินเตอร์เนชั่นแนล แลบบอราทอรีส์ จำกัด",
     "เอส แอนด์ เจ อินเตอร์เนชั่นแนล",
-]
+]  # <-- ปิดลิสต์ให้สมบูรณ์
+
+BRANDS: List[str] = [] 
 
 WORKERS   = 1
 FAST_MODE = True
@@ -856,4 +858,5 @@ def main(headless=True, outdir="output_csv", workers=None):
 if __name__ == "__main__":
     mp.freeze_support()
     main(headless=True, workers=WORKERS)
+
     time.sleep(0.2)
