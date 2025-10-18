@@ -2,13 +2,21 @@ name: FDA Operators (daily 04:00 ICT)
 
 on:
   schedule:
-    - cron: "0 21 * * *"   # 21:00 UTC = 04:00 ICT every day
+    - cron: "0 21 * * *"   # 21:00 UTC = 04:00 ICT
   workflow_dispatch: {}
+
+permissions:
+  contents: write   # เผื่ออนาคตอยากให้ push baseline อัตโนมัติ
+
+concurrency:
+  group: fda-operators
+  cancel-in-progress: false
 
 jobs:
   run-operators:
     runs-on: ubuntu-latest
     timeout-minutes: 350
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,7 +41,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run FDAOPERATORS.py
+      - name: Run FDAOPERATORS.py (scrape/generate outputs)
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
@@ -44,12 +52,14 @@ jobs:
         run: |
           python FDAOPERATORS.py
 
-      - name: Upload CSV outputs (if any)
+      # ⬇⬇⬇ เพิ่มขั้นตอน "เทียบ + เก็บผล"
+      - name: Compare to baseline
+        run: python compare_baseline.py
+
+      - name: Upload compare results (out/**)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: outputs-operators-${{ github.run_id }}
-          path: |
-            output_csv/**
-            logs/**
+          name: compare-results-operators-${{ github.run_id }}
+          path: out/**
           if-no-files-found: ignore
