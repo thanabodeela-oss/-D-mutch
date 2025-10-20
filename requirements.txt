@@ -2,3 +2,4 @@ pandas
 selenium
 webdriver-manager
 python-dateutil
+XlsxWriter>=3.2.0
