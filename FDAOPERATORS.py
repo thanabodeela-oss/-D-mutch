@@ -1,7 +1,7 @@
-# FDA.py – Scraper + Diff Reporter (แก้ไขให้ใช้งานได้)
+# FDA.py – Scraper + Diff Reporter (OPERATORS mode + baseline seeding)
 # -*- coding: utf-8 -*-
 import os, re, time, json, ssl, smtplib
-from typing import List, Dict, Literal
+from typing import List, Dict
 from datetime import datetime
 import pandas as pd
 
@@ -16,10 +16,10 @@ import multiprocessing as mp
 from email.message import EmailMessage
 from selenium.common.exceptions import TimeoutException
 
-# ===== URL เดิม =====
+# ===== URL =====
 URL = "https://pertento.fda.moph.go.th/FDA_SEARCH_CENTER/PRODUCT/FRM_SEARCH_CMT.aspx"
 
-# ====== CONFIG ======
+# ===== คอนฟิก =====
 OPERATORS = [
     "บริษัท อังกฤษตรางู (แอล.พี.) จำกัด",
     "บริษัท คัลเล่อร์คอส จำกัด",
@@ -30,9 +30,8 @@ OPERATORS = [
     "บริษัท ไมลอทท์ แลบบอราทอรีส์ จำกัด",
     "บริษัท อินเตอร์เนชั่นแนล แลบบอราทอรีส์ จำกัด",
     "เอส แอนด์ เจ อินเตอร์เนชั่นแนล",
-]  # <-- ปิดลิสต์ให้สมบูรณ์
-
-BRANDS: List[str] = [] 
+]
+BRANDS: List[str] = []  # โหมดนี้ไม่ค้นยี่ห้อ
 
 WORKERS   = 1
 FAST_MODE = True
@@ -44,23 +43,15 @@ COLS = [
     "operator_name","foreign_mfr","contract_manufacturer","reference_for","skus",
 ]
 TH_HEADERS = {
-    "trade_name":"ชื่อการค้า",
-    "cosmetic_name":"ชื่อเครื่องสำอาง",
-    "notification_no":"เลขที่ใบรับจดแจ้ง",
-    "notification_year_be_last2":"ปีที่จดแจ้ง",
-    "notification_type":"ประเภทการจดแจ้ง",
-    "notification_status":"สถานะใบรับจดแจ้ง",
-    "approve_date":"วันที่อนุญาต",
-    "expire_date":"วันที่หมดอายุ",
-    "operator_name":"ชื่อผู้ประกอบการ",
-    "foreign_mfr":"ชื่อและที่อยู่ผู้ผลิตต่างประเทศ",
-    "contract_manufacturer":"ชื่อผู้ว่าจ้างผลิต",
-    "reference_for":"เลขอ้างอิงสำหรับ",
-    "skus":"SKUs",
+    "trade_name":"ชื่อการค้า","cosmetic_name":"ชื่อเครื่องสำอาง","notification_no":"เลขที่ใบรับจดแจ้ง",
+    "notification_year_be_last2":"ปีที่จดแจ้ง","notification_type":"ประเภทการจดแจ้ง",
+    "notification_status":"สถานะใบรับจดแจ้ง","approve_date":"วันที่อนุญาต","expire_date":"วันที่หมดอายุ",
+    "operator_name":"ชื่อผู้ประกอบการ","foreign_mfr":"ชื่อและที่อยู่ผู้ผลิตต่างประเทศ",
+    "contract_manufacturer":"ชื่อผู้ว่าจ้างผลิต","reference_for":"เลขอ้างอิงสำหรับ","skus":"SKUs",
 }
 BASE_HEADERS = [TH_HEADERS[c] for c in COLS if c in TH_HEADERS]
 
-class DetailOpenError(Exception): pass
+class DetailOpenError(Exception): ...
 def log(msg): print(msg, flush=True)
 
 # ---------- WebDriver ----------
@@ -136,10 +127,8 @@ def open_search_with_retries(drv, retries=4):
         except Exception:
             log(f"[open] attempt {attempt}: element not ready -> refresh")
             time.sleep(1.0 * attempt)
-            try:
-                drv.refresh(); wait_ajax_idle(drv, 45)
-            except Exception:
-                pass
+            try: drv.refresh(); wait_ajax_idle(drv, 45)
+            except Exception: pass
     return False
 
 def click_search(drv):
@@ -155,14 +144,11 @@ def wait_for_rows(drv, timeout=120) -> int:
     t0 = time.time()
     while True:
         rows = drv.find_elements(By.XPATH, "//table[contains(@class,'rgMasterTable')]/tbody/tr[count(td)>=2]")
-        if rows:
-            return len(rows)
-        if drv.find_elements(By.XPATH, "//td[contains(.,'No records to display')]"):
-            return 0
+        if rows: return len(rows)
+        if drv.find_elements(By.XPATH, "//td[contains(.,'No records to display')]"): return 0
         drv.execute_script("window.scrollBy(0,200);"); drv.execute_script("window.scrollBy(0,-200);")
         time.sleep(0.25)
-        if time.time() - t0 > timeout:
-            raise TimeoutError("ตารางยังไม่โหลด ภายในเวลาที่กำหนด")
+        if time.time() - t0 > timeout: raise TimeoutError("ตารางยังไม่โหลด ภายในเวลาที่กำหนด")
 
 def page_val(drv) -> str:
     els = drv.find_elements(By.XPATH, "//input[contains(@class,'rgCurrentPage')]")
@@ -184,13 +170,11 @@ def next_exists(drv) -> bool:
 
 def go_next(drv, retries: int = 3) -> bool:
     for attempt in range(1, retries + 1):
-        before_key = first_row_key(drv)
-        before_page = page_val(drv)
+        before_key = first_row_key(drv); before_page = page_val(drv)
         btns = (drv.find_elements(By.XPATH, "//input[contains(@class,'rgPageNext') and not(@disabled)]")
                 or drv.find_elements(By.XPATH, "//a[contains(@class,'rgPageNext') and not(contains(@class,'rgDisabled'))]"))
         if not btns: return False
-        drv.execute_script("arguments[0].scrollIntoView({block:'center'});", btns[0])
-        time.sleep(0.2)
+        drv.execute_script("arguments[0].scrollIntoView({block:'center'});", btns[0]); time.sleep(0.2)
         drv.execute_script("arguments[0].click();", btns[0])
         try:
             WebDriverWait(drv, 45 if FAST_MODE else 60).until(
@@ -207,8 +191,7 @@ def go_next(drv, retries: int = 3) -> bool:
 # ---------- Utils ----------
 def align_new_changes_strict(df_report, keep_status=True):
     status_col = "สถานะ"
-    df = df_report.copy()
-    df = df.rename(columns=TH_HEADERS)
+    df = df_report.copy().rename(columns=TH_HEADERS)
     strict_cols = ([status_col] if (keep_status and status_col in df.columns) else []) + BASE_HEADERS
     for col in strict_cols:
         if col not in df.columns: df[col] = ""
@@ -237,14 +220,12 @@ def notif_from_row_text(text: str) -> str:
     m = NOTIF_RE.search(text or "")
     return f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else ""
 
-# ---------- Search (ผู้ประกอบการ) ----------
+# ---------- Search/operator ----------
 def ensure_on_grid(drv, operator: str, yy2: str, max_back=2):
     for _ in range(max_back):
         if grid_present(drv): return
-        try:
-            drv.back(); wait_ajax_idle(drv, 60)
-        except Exception:
-            break
+        try: drv.back(); wait_ajax_idle(drv, 60)
+        except Exception: break
         if grid_present(drv): return
     drv.get(URL); wait_ajax_idle(drv, 60)
     fill_and_search(drv, operator, yy2)
@@ -262,101 +243,28 @@ def fill_and_search(drv, operator: str, yy2: str):
             try: drv.get(URL); wait_ajax_idle(drv, 60)
             except Exception: pass
             continue
-
         try:
             drv.execute_script("arguments[0].value = '';", op)
             drv.execute_script("arguments[0].value = '';", yy)
             for el in brand_el:
                 try: drv.execute_script("arguments[0].value='';", el)
                 except: pass
-        except Exception:
-            pass
+        except Exception: pass
         time.sleep(0.05)
         try:
-            op.send_keys(operator[:2])
-            yy.send_keys(yy2)
+            op.send_keys(operator[:2]); yy.send_keys(yy2)
             drv.execute_script("arguments[0].value = arguments[1];", op, operator)
-        except Exception:
-            continue
+        except Exception: continue
 
         click_search(drv)
         try:
             n = wait_for_rows(drv, timeout=120 if attempt == 1 else 180)
-            log(f"  -> โหลดตารางแล้ว {n} แถว (ปี {yy2})")
-            return
+            log(f"  -> โหลดตารางแล้ว {n} แถว (ปี {yy2})"); return
         except (TimeoutException, TimeoutError):
             log(f"[fill_and_search] Timeout (attempt {attempt}) -> refresh")
         except Exception as e:
             log(f"[fill_and_search] unexpected: {e}")
-
     raise RuntimeError(f"ค้นหาไม่สำเร็จหลายครั้ง: {operator} (ปี {yy2})")
-
-# ---------- Search (ยี่ห้อ) ----------
-def ensure_on_grid_brand(drv, brand: str, yy2: str, max_back=2):
-    for _ in range(max_back):
-        if grid_present(drv): return
-        try:
-            drv.back(); wait_ajax_idle(drv, 60)
-        except Exception:
-            break
-        if grid_present(drv): return
-    drv.get(URL); wait_ajax_idle(drv, 60)
-    fill_and_search_brand(drv, brand, yy2)
-
-def _find_brand_input(drv):
-    ids = ["ContentPlaceHolder1_txt_trade", "ContentPlaceHolder1_txt_tradename", "ContentPlaceHolder1_txt_brand"]
-    for i in ids:
-        el = drv.find_elements(By.ID, i)
-        if el: return el[0]
-    xps = [
-        "//label[contains(.,'ค้นจากชื่อการค้า')]/following::input[1]",
-        "//span[contains(.,'ค้นจากชื่อการค้า')]/following::input[1]",
-        "//div[contains(.,'ค้นจากชื่อการค้า')]/following::input[1]",
-    ]
-    for xp in xps:
-        els = drv.find_elements(By.XPATH, xp)
-        if els: return els[0]
-    txts = drv.find_elements(By.XPATH, "//input[@type='text' or not(@type)]")
-    return txts[1] if len(txts) >= 2 else None
-
-def fill_and_search_brand(drv, brand: str, yy2: str):
-    if not open_search_with_retries(drv):
-        raise RuntimeError("เปิดหน้า Search ไม่สำเร็จหลัง retry หลายครั้ง")
-    for attempt in range(1, 4):
-        try:
-            op = drv.find_element(By.ID, "ContentPlaceHolder1_txt_oper")
-            yy = drv.find_element(By.ID, "ContentPlaceHolder1_Txt_fdpdtno")
-            br = _find_brand_input(drv)
-            if br is None: raise RuntimeError("หา input 'ชื่อการค้า' ไม่พบ")
-        except Exception:
-            try: drv.get(URL); wait_ajax_idle(drv, 60)
-            except Exception: pass
-            continue
-
-        try:
-            for el in (op, yy, br):
-                try: drv.execute_script("arguments[0].value='';", el)
-                except: pass
-        except Exception:
-            pass
-        time.sleep(0.05)
-        try:
-            br.send_keys(brand[:2]); yy.send_keys(yy2)
-            drv.execute_script("arguments[0].value = arguments[1];", br, brand)
-        except Exception:
-            continue
-
-        click_search(drv)
-        try:
-            n = wait_for_rows(drv, timeout=120 if attempt == 1 else 180)
-            log(f"  -> โหลดตารางแล้ว {n} แถว (ยี่ห้อ '{brand}', ปี {yy2})")
-            return
-        except (TimeoutException, TimeoutError):
-            log(f"[fill_and_search_brand] Timeout (attempt {attempt}) -> refresh")
-        except Exception as e:
-            log(f"[fill_and_search_brand] unexpected: {e}")
-
-    raise RuntimeError(f"ค้นหาไม่สำเร็จหลายครั้ง (ยี่ห้อ): {brand} (ปี {yy2})")
 
 # ---------- เปิดรายละเอียด ----------
 def _txt_by_id(drv, _id: str) -> str:
@@ -368,7 +276,6 @@ def _txt_by_id(drv, _id: str) -> str:
         return ""
 
 def open_detail_and_back(drv, link, operator: str, yy2: str) -> Dict[str, str]:
-    """เปิดรายละเอียด สำหรับ ผู้ประกอบการ"""
     base = drv.current_window_handle
     before = set(drv.window_handles)
     href = link.get_attribute("href") or ""
@@ -386,8 +293,7 @@ def open_detail_and_back(drv, link, operator: str, yy2: str) -> Dict[str, str]:
         """
         drv.execute_script(js, target, arg)
     else:
-        drv.execute_script("arguments[0].scrollIntoView({block:'center'});", link)
-        time.sleep(0.2)
+        drv.execute_script("arguments[0].scrollIntoView({block:'center'});", link); time.sleep(0.2)
         drv.execute_script("arguments[0].click();", link)
 
     try:
@@ -427,95 +333,18 @@ def open_detail_and_back(drv, link, operator: str, yy2: str) -> Dict[str, str]:
         "foreign_mfr": _txt_by_id(drv, "ContentPlaceHolder1_lb_fac_pop"),
         "contract_manufacturer": _txt_by_id(drv, "ContentPlaceHolder1_lb_NAME_EMPLOYER"),
         "reference_for": _txt_by_id(drv, "ContentPlaceHolder1_lb_NO_pop"),
-        "skus": "",
-        "notification_year_be_last2": ""
+        "skus": "", "notification_year_be_last2": ""
     }
     rec["notification_year_be_last2"] = year_from_no(rec.get("notification_no",""))
 
     if opened_new: drv.close(); drv.switch_to.window(base)
     else: drv.back()
-    wait_ajax_idle(drv, 60)
-    ensure_on_grid(drv, operator, yy2)
-    wait_for_rows(drv)
+    wait_ajax_idle(drv, 60); ensure_on_grid(drv, operator, yy2); wait_for_rows(drv)
     log(f"     ✓ ดึงแล้ว: {rec.get('notification_no','')}")
     return rec
 
-def open_detail_and_back_brand(drv, link, brand: str, yy2: str) -> Dict[str, str]:
-    """เปิดรายละเอียด สำหรับ ยี่ห้อ"""
-    base = drv.current_window_handle
-    before = set(drv.window_handles)
-    href = link.get_attribute("href") or ""
-    m = re.search(r"__doPostBack\('([^']+)','([^']*)'\)", href)
-    if m:
-        target, arg = m.group(1), m.group(2)
-        js = """
-        (function(target,arg){
-          var f=document.forms[0];
-          function ensure(n){var el=document.getElementsByName(n)[0]; if(!el){el=document.createElement('input');el.type='hidden';el.name=n;el.id=n;f.appendChild(el);} return el;}
-          ensure('__EVENTTARGET').value   = target||'';
-          ensure('__EVENTARGUMENT').value = arg||'';
-          f.submit();
-        })(arguments[0],arguments[1]);
-        """
-        drv.execute_script(js, target, arg)
-    else:
-        drv.execute_script("arguments[0].scrollIntoView({block:'center'});", link)
-        time.sleep(0.2)
-        drv.execute_script("arguments[0].click();", link)
-
-    try:
-        WebDriverWait(drv, 30).until(
-            lambda d: len(d.window_handles) > len(before) or d.find_elements(By.ID, "ContentPlaceHolder1_lb_no_regnos")
-        )
-    except Exception:
-        drv.execute_script("arguments[0].click();", link)
-        WebDriverWait(drv, 30).until(
-            lambda d: len(d.window_handles) > len(before) or d.find_elements(By.ID, "ContentPlaceHolder1_lb_no_regnos")
-        )
-
-    after = set(drv.window_handles)
-    opened_new = len(after) > len(before)
-    if opened_new: drv.switch_to.window((after - before).pop())
-
-    try:
-        wait_ajax_idle(drv, 60)
-        w_xpath(drv, "//*[@id='ContentPlaceHolder1_lb_no_regnos']", 45 if FAST_MODE else 60)
-        w_xpath(drv, "//*[@id='ContentPlaceHolder1_lb_status']", 45 if FAST_MODE else 60)
-    except Exception as e:
-        try:
-            if opened_new: drv.close(); drv.switch_to.window(base)
-        finally:
-            ensure_on_grid_brand(drv, brand, yy2)
-        raise DetailOpenError(str(e))
-
-    rec = {
-        "notification_status": _txt_by_id(drv, "ContentPlaceHolder1_lb_status"),
-        "notification_no": _txt_by_id(drv, "ContentPlaceHolder1_lb_no_regnos"),
-        "notification_type": _txt_by_id(drv, "ContentPlaceHolder1_lb_type"),
-        "trade_name": _txt_by_id(drv, "ContentPlaceHolder1_lb_trade_Tpop"),
-        "cosmetic_name": _txt_by_id(drv, "ContentPlaceHolder1_lb_cosnm_Tpop"),
-        "approve_date": _txt_by_id(drv, "ContentPlaceHolder1_lb_appdate"),
-        "expire_date": _txt_by_id(drv, "ContentPlaceHolder1_lb_expdate"),
-        "operator_name": _txt_by_id(drv, "ContentPlaceHolder1_lb_usernm_pop"),
-        "foreign_mfr": _txt_by_id(drv, "ContentPlaceHolder1_lb_fac_pop"),
-        "contract_manufacturer": _txt_by_id(drv, "ContentPlaceHolder1_lb_NAME_EMPLOYER"),
-        "reference_for": _txt_by_id(drv, "ContentPlaceHolder1_lb_NO_pop"),
-        "skus": "",
-        "notification_year_be_last2": ""
-    }
-    rec["notification_year_be_last2"] = year_from_no(rec.get("notification_no",""))
-
-    if opened_new: drv.close(); drv.switch_to.window(base)
-    else: drv.back()
-    wait_ajax_idle(drv, 60)
-    ensure_on_grid_brand(drv, brand, yy2)
-    wait_for_rows(drv)
-    log(f"     ✓ ดึงแล้ว: {rec.get('notification_no','')}")
-    return rec
-
-# ---------- Scrape (หน้า/กริด) ----------
+# ---------- Scrape (grid) ----------
 def scrape_page(drv, operator: str, yy2: str) -> List[Dict]:
-    """สำหรับ ผู้ประกอบการ"""
     out: List[Dict] = []
     wait_for_rows(drv); i = 1
     while True:
@@ -524,56 +353,20 @@ def scrape_page(drv, operator: str, yy2: str) -> List[Dict]:
         if n == 0 or i > n: break
         try:
             row = drv.find_element(By.XPATH, f"(//table[contains(@class,'rgMasterTable')]/tbody/tr[count(td)>=2])[{i}]")
-            txt = row.text or ""
-            no = notif_from_row_text(txt)
-            if not no or year_from_no(no) != yy2:
-                i += 1; continue
+            txt = row.text or ""; no = notif_from_row_text(txt)
+            if not no or year_from_no(no) != yy2: i += 1; continue
             link = row.find_element(By.XPATH, ".//a[contains(@href,'__doPostBack') and contains(.,'ดูข้อมูล')]")
             log(f"  -> CLICK ดูข้อมูล | เลขจดแจ้ง={no} | row={i}/{n}")
             rec = open_detail_and_back(drv, link, operator, yy2)
             if valid_pos45(rec.get("notification_no","")):
-                rec["operator_name_query"] = operator
-                out.append(rec)
+                rec["operator_name_query"] = operator; out.append(rec)
             i += 1
         except DetailOpenError as e:
             log(f"     ! เปิดรายละเอียดไม่สำเร็จ (ข้ามแถวนี้) : {str(e).splitlines()[0]}"); i += 1; continue
         except Exception as e:
-            msg = getattr(e, "msg", str(e))
-            first = msg.splitlines()[0] if isinstance(msg, str) and msg else str(type(e).__name__)
+            msg = getattr(e, "msg", str(e)); first = msg.splitlines()[0] if isinstance(msg, str) and msg else str(type(e).__name__)
             log(f"     ! ซิงค์ตารางใหม่ (i={i}/{n}) : {first}")
-            wait_ajax_idle(drv, 60); ensure_on_grid(drv, operator, yy2); wait_for_rows(drv); time.sleep(0.2)
-            continue
-    return out
-
-def scrape_page_brand(drv, brand: str, yy2: str) -> List[Dict]:
-    """สำหรับ ยี่ห้อ"""
-    out: List[Dict] = []
-    wait_for_rows(drv); i = 1
-    while True:
-        rows = drv.find_elements(By.XPATH, "//table[contains(@class,'rgMasterTable')]/tbody/tr[count(td)>=2]")
-        n = len(rows)
-        if n == 0 or i > n: break
-        try:
-            row = drv.find_element(By.XPATH, f"(//table[contains(@class,'rgMasterTable')]/tbody/tr[count(td)>=2])[{i}]")
-            txt = row.text or ""
-            no = notif_from_row_text(txt)
-            if not no or year_from_no(no) != yy2:
-                i += 1; continue
-            link = row.find_element(By.XPATH, ".//a[contains(@href,'__doPostBack') and contains(.,'ดูข้อมูล')]")
-            log(f"  -> CLICK ดูข้อมูล | เลขจดแจ้ง={no} | row={i}/{n}")
-            rec = open_detail_and_back_brand(drv, link, brand, yy2)
-            if valid_pos45(rec.get("notification_no","")):
-                rec["brand_query"] = brand
-                out.append(rec)
-            i += 1
-        except DetailOpenError as e:
-            log(f"     ! เปิดรายละเอียดไม่สำเร็จ (ข้ามแถวนี้) : {str(e).splitlines()[0]}"); i += 1; continue
-        except Exception as e:
-            msg = getattr(e, "msg", str(e))
-            first = msg.splitlines()[0] if isinstance(msg, str) and msg else str(type(e).__name__)
-            log(f"     ! ซิงค์ตารางใหม่ (i={i}/{n}) : {first}")
-            wait_ajax_idle(drv, 60); ensure_on_grid_brand(drv, brand, yy2); wait_for_rows(drv); time.sleep(0.2)
-            continue
+            wait_ajax_idle(drv, 60); ensure_on_grid(drv, operator, yy2); wait_for_rows(drv); time.sleep(0.2); continue
     return out
 
 def scrape_operator(drv, operator: str) -> List[Dict]:
@@ -588,20 +381,6 @@ def scrape_operator(drv, operator: str) -> List[Dict]:
             if next_exists(drv) and go_next(drv): continue
             break
     log(f"Done (ผู้ประกอบการ): {operator} -> {len(results)} แถว")
-    return results
-
-def scrape_brand(drv, brand: str) -> List[Dict]:
-    log(f"Start (ยี่ห้อ): {brand}")
-    results: List[Dict] = []
-    for yy2 in sorted(ALLOW_YY):
-        fill_and_search_brand(drv, brand, yy2)
-        if drv.find_elements(By.XPATH, "//td[contains(.,'No records to display')]"):
-            log(f"  -> ปี {yy2}: ไม่มีข้อมูล"); continue
-        while True:
-            results.extend(scrape_page_brand(drv, brand, yy2))
-            if next_exists(drv) and go_next(drv): continue
-            break
-    log(f"Done (ยี่ห้อ): {brand} -> {len(results)} แถว")
     return results
 
 # ---------- Seen storage & email ----------
@@ -643,14 +422,11 @@ def send_email_with_attachments(subject: str, body: str, attachments: list):
     user = os.environ.get("SMTP_USER", "")
     pwd = os.environ.get("SMTP_PASS", "")
     to_list = [x.strip() for x in os.environ.get("SMTP_TO", "").split(",") if x.strip()]
-
     if not (host and port and user and pwd and to_list):
         log("SMTP env ไม่ครบ (HOST/PORT/USER/PASS/TO) – ข้ามการส่งอีเมล"); return
 
-    msg = EmailMessage()
-    msg["Subject"] = subject; msg["From"] = user; msg["To"] = ", ".join(to_list)
+    msg = EmailMessage(); msg["Subject"] = subject; msg["From"] = user; msg["To"] = ", ".join(to_list)
     msg.set_content(body)
-
     for path in attachments or []:
         try:
             with open(path, "rb") as f: data = f.read()
@@ -675,6 +451,27 @@ def send_email_with_attachments(subject: str, body: str, attachments: list):
     except Exception as e:
         log(f"ส่งอีเมลไม่สำเร็จ: {e}")
 
+# ---------- Baseline seeding ----------
+def seed_seen_from_csvs(dirpath: str):
+    """สร้าง baseline จากไฟล์ CSV ใน dirpath (อ่านได้ทั้งคอลัมน์ไทย/อังกฤษ)"""
+    ops, items = set(), set()
+    if not os.path.isdir(dirpath): return ops, items
+    for fn in os.listdir(dirpath):
+        if not fn.lower().endswith(".csv"): continue
+        p = os.path.join(dirpath, fn)
+        try:
+            df = pd.read_csv(p)
+        except Exception:
+            continue
+        if "operator_name" in df.columns:
+            ops |= set(str(x).strip() for x in df["operator_name"].dropna().astype(str))
+        elif "ชื่อผู้ประกอบการ" in df.columns:
+            ops |= set(str(x).strip() for x in df["ชื่อผู้ประกอบการ"].dropna().astype(str))
+        col_no = "notification_no" if "notification_no" in df.columns else ("เลขที่ใบรับจดแจ้ง" if "เลขที่ใบรับจดแจ้ง" in df.columns else None)
+        if col_no:
+            items |= set(str(x).strip() for x in df[col_no].dropna().astype(str))
+    return ops, items
+
 # ---------- Runner ----------
 def run_one_operator(op, headless=True, outdir="output_csv"):
     drv = setup(headless=headless)
@@ -685,21 +482,6 @@ def run_one_operator(op, headless=True, outdir="output_csv"):
             df = df.reindex(columns=[c for c in COLS if c in df.columns]).rename(columns=TH_HEADERS)
         os.makedirs(outdir, exist_ok=True)
         out = os.path.join(outdir, f"{safe_name(op)}.csv")
-        df.to_csv(out, index=False, encoding="utf-8-sig")
-        log(f"Saved: {out} ({len(df):,} แถว)")
-        return out
-    finally:
-        drv.quit()
-
-def run_one_brand(brand, headless=True, outdir="output_csv"):
-    drv = setup(headless=headless)
-    try:
-        rows = scrape_brand(drv, brand)
-        df = pd.DataFrame(rows)
-        if not df.empty:
-            df = df.reindex(columns=[c for c in COLS if c in df.columns]).rename(columns=TH_HEADERS)
-        os.makedirs(outdir, exist_ok=True)
-        out = os.path.join(outdir, f"BRAND__{safe_name(brand)}.csv")
         df.to_csv(out, index=False, encoding="utf-8-sig")
         log(f"Saved: {out} ({len(df):,} แถว)")
         return out
@@ -744,37 +526,22 @@ def main(headless=True, outdir="output_csv", workers=None):
                 except Exception:
                     pass
 
-    # ===== รอบ "ชื่อการค้า/ยี่ห้อ" =====
-    if workers <= 1:
-        drv = setup(headless=headless)
-        try:
-            for brand in BRANDS:
-                rows = scrape_brand(drv, brand)
-                df = pd.DataFrame(rows)
-                if not df.empty:
-                    df = df.reindex(columns=[c for c in COLS if c in df.columns]).rename(columns=TH_HEADERS)
-                out = os.path.join(outdir, f"BRAND__{safe_name(brand)}.csv")
-                df.to_csv(out, index=False, encoding="utf-8-sig")
-                log(f"Saved: {out} ({len(df):,} แถว)\n")
-                all_ops_current |= collect_operator_names(df)
-                all_items_current += collect_items(df)
-        finally:
-            drv.quit()
-    else:
-        with mp.Pool(processes=min(workers, len(BRANDS), mp.cpu_count())) as pool:
-            pool.starmap(run_one_brand, [(b, headless, outdir) for b in BRANDS])
-        for fn in os.listdir(outdir):
-            if fn.lower().endswith(".csv") and fn.startswith("BRAND__"):
-                try:
-                    df = pd.read_csv(os.path.join(outdir, fn))
-                    all_ops_current |= collect_operator_names(df)
-                    all_items_current += collect_items(df)
-                except Exception:
-                    pass
-
     # ===== Diff & Report =====
     seen_ops = load_seen_set(SEEN_OP_PATH)
     seen_item_nos = load_seen_set(SEEN_ITEM_PATH)
+
+    # ถ้ายังไม่มี baseline ให้ seed จาก baseline/
+    if not seen_ops and not seen_item_nos:
+        base_dir = os.environ.get("FDA_BASELINE_DIR", "baseline")
+        log(f"No seen baseline found → seeding from '{base_dir}' ...")
+        seed_ops, seed_items = seed_seen_from_csvs(base_dir)
+        if seed_ops or seed_items:
+            save_seen_set(SEEN_OP_PATH, seed_ops)
+            save_seen_set(SEEN_ITEM_PATH, seed_items)
+            seen_ops, seen_item_nos = seed_ops, seed_items
+            log(f"Seeded baseline: ops={len(seed_ops):,}, items={len(seed_items):,}")
+        else:
+            log(f"Baseline folder '{base_dir}' not found or empty.")
 
     by_operator_all = {}
     for it in all_items_current:
@@ -802,10 +569,8 @@ def main(headless=True, outdir="output_csv", workers=None):
         today = datetime.now().strftime("%Y-%m-%d")
         new_csv = os.path.join(outdir, f"new_changes_{today}.csv")
         df_report = pd.DataFrame(report_rows)
-
         if "notification_year_be_last2" not in df_report.columns and "notification_no" in df_report.columns:
             df_report["notification_year_be_last2"] = df_report["notification_no"].map(year_from_no)
-
         df_report = align_new_changes_strict(df_report, keep_status=True)
         df_report.to_csv(new_csv, index=False, encoding="utf-8-sig")
 
@@ -858,5 +623,4 @@ def main(headless=True, outdir="output_csv", workers=None):
 if __name__ == "__main__":
     mp.freeze_support()
     main(headless=True, workers=WORKERS)
-
     time.sleep(0.2)
